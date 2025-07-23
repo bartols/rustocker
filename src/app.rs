@@ -3,8 +3,8 @@ use color_eyre::Result;
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 use futures::{FutureExt, StreamExt};
 use ratatui::{Terminal, backend::CrosstermBackend};
-use std::io;
-use tokio::sync::mpsc;
+use std::{io, sync::Arc};
+use tokio::sync::{Mutex, mpsc};
 use tokio_util::sync::CancellationToken;
 
 #[derive(Debug)]
@@ -30,6 +30,8 @@ pub struct App {
     pub images: Vec<String>,
     pub networks: Vec<String>,
     pub volumes: Vec<String>,
+    // Shared Docker client
+    docker_client: Arc<Mutex<DockerClient>>,
     // Event handling
     event_rx: mpsc::UnboundedReceiver<AppEvent>,
     event_tx: mpsc::UnboundedSender<AppEvent>,
@@ -41,6 +43,9 @@ impl App {
         let (event_tx, event_rx) = mpsc::unbounded_channel();
         let cancellation_token = CancellationToken::new();
 
+        // Initialize shared Docker client
+        let docker_client = Arc::new(Mutex::new(DockerClient::new().await?));
+
         Ok(Self {
             active_tab: 0,
             should_quit: false,
@@ -48,6 +53,7 @@ impl App {
             images: Vec::new(),
             networks: Vec::new(),
             volumes: Vec::new(),
+            docker_client,
             event_rx,
             event_tx,
             cancellation_token,
@@ -96,14 +102,12 @@ impl App {
                 self.volumes = volumes;
             }
             AppEvent::RefreshRequested => {
-                // Create a new docker client and fetch data immediately
-                tokio::spawn({
-                    let event_tx = self.event_tx.clone();
-                    async move {
-                        if let Ok(docker_client) = DockerClient::new().await {
-                            Self::fetch_all_docker_data(&docker_client, &event_tx).await;
-                        }
-                    }
+                // Use the shared Docker client for immediate refresh
+                let docker_client = Arc::clone(&self.docker_client);
+                let event_tx = self.event_tx.clone();
+
+                tokio::spawn(async move {
+                    Self::fetch_all_docker_data(&docker_client, &event_tx).await;
                 });
             }
             AppEvent::Error(error) => {
@@ -144,7 +148,7 @@ impl App {
     }
 
     async fn start_docker_task(&self) -> Result<()> {
-        let docker_client = DockerClient::new().await?;
+        let docker_client = Arc::clone(&self.docker_client);
         let event_tx = self.event_tx.clone();
         let cancellation_token = self.cancellation_token.clone();
 
@@ -171,11 +175,13 @@ impl App {
     }
 
     async fn fetch_all_docker_data(
-        docker_client: &DockerClient,
+        docker_client: &Arc<Mutex<DockerClient>>,
         event_tx: &mpsc::UnboundedSender<AppEvent>,
     ) {
+        let client = docker_client.lock().await;
+
         // Fetch containers
-        match docker_client.list_containers().await {
+        match client.list_containers().await {
             Ok(containers) => {
                 let _ = event_tx.send(AppEvent::ContainersUpdated(containers));
             }
@@ -185,7 +191,7 @@ impl App {
         }
 
         // Fetch images
-        match docker_client.list_images().await {
+        match client.list_images().await {
             Ok(images) => {
                 let _ = event_tx.send(AppEvent::ImagesUpdated(images));
             }
@@ -195,7 +201,7 @@ impl App {
         }
 
         // Fetch networks
-        match docker_client.list_networks().await {
+        match client.list_networks().await {
             Ok(networks) => {
                 let _ = event_tx.send(AppEvent::NetworksUpdated(networks));
             }
@@ -205,7 +211,7 @@ impl App {
         }
 
         // Fetch volumes
-        match docker_client.list_volumes().await {
+        match client.list_volumes().await {
             Ok(volumes) => {
                 let _ = event_tx.send(AppEvent::VolumesUpdated(volumes));
             }
