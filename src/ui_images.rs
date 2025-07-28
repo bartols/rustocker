@@ -1,5 +1,9 @@
 use crate::components::Component;
 use crate::docker::DockerClient;
+
+use bollard::{image, models::ImageSummary};
+
+use async_trait::async_trait;
 use color_eyre::Result;
 use crossterm::event::KeyCode;
 use ratatui::{
@@ -9,14 +13,28 @@ use ratatui::{
 };
 use std::sync::Arc;
 use tokio::sync::Mutex;
-use tokio_util::sync::CancellationToken;
+
+fn get_name(image: &ImageSummary) -> String {
+    let tags = &image.repo_tags;
+    if !tags.is_empty() && tags[0] != "<none>:<none>" {
+        tags[0].clone()
+    } else {
+        // Use first 12 chars of image ID as fallback
+        let id = image.id.clone();
+        if id.len() > 12 {
+            format!("{}...", &id[7..19]) // Skip "sha256:" prefix
+        } else {
+            id
+        }
+    }
+}
 
 pub struct ImagesUI {
     tab_num: usize,
     docker_client: Arc<Mutex<DockerClient>>,
     selected_index: usize,
-    images: Vec<String>,
-    cancellation_token: CancellationToken,
+    images: Vec<ImageSummary>,
+    last_tick: std::time::Instant,
 }
 
 impl ImagesUI {
@@ -26,7 +44,7 @@ impl ImagesUI {
             docker_client,
             selected_index: 0,
             images: Vec::new(),
-            cancellation_token: CancellationToken::new(),
+            last_tick: std::time::Instant::now(),
         }
     }
 
@@ -48,8 +66,10 @@ impl ImagesUI {
         }
     }
 
-    fn get_selected_image(&self) -> Option<&String> {
-        self.images.get(self.selected_index)
+    fn get_selected_image(&self) -> Option<String> {
+        self.images
+            .get(self.selected_index)
+            .map(|img| get_name(img))
     }
 
     async fn delete_image(&self, image_name: &str) -> Result<()> {
@@ -74,6 +94,7 @@ impl ImagesUI {
     }
 }
 
+#[async_trait]
 impl Component for ImagesUI {
     fn name(&self) -> &str {
         "Images"
@@ -84,34 +105,15 @@ impl Component for ImagesUI {
     }
 
     async fn start(&mut self) -> Result<()> {
-        let docker_client = Arc::clone(&self.docker_client);
-        let cancellation_token = self.cancellation_token.clone();
+        self.refresh_now().await
+    }
 
-        // Initial load
-        self.refresh_now().await?;
-
-        tokio::spawn(async move {
-            // Set up refresh interval (images refresh every 15 seconds - less frequent)
-            let mut interval = tokio::time::interval(tokio::time::Duration::from_secs(15));
-            interval.reset();
-
-            loop {
-                tokio::select! {
-                    _ = cancellation_token.cancelled() => {
-                        break;
-                    }
-                    _ = interval.tick() => {
-                        if let Err(e) = docker_client.lock().await.list_images().await {
-                            eprintln!("Failed to refresh images: {}", e);
-                        }
-                        // Note: Background refresh only logs errors
-                        // Manual refresh updates the UI data
-                    }
-                }
-            }
-        });
-
-        Ok(())
+    async fn tick(&mut self) {
+        let now = std::time::Instant::now();
+        if now.duration_since(self.last_tick).as_secs() >= 10 {
+            self.last_tick = now;
+            let _ = self.refresh_now().await;
+        }
     }
 
     async fn handle_input(&mut self, key: KeyCode) -> Result<()> {
@@ -132,17 +134,17 @@ impl Component for ImagesUI {
             }
             KeyCode::Char('d') => {
                 if let Some(image_name) = self.get_selected_image() {
-                    self.delete_image(image_name).await?;
+                    self.delete_image(&image_name).await?;
                 }
             }
             KeyCode::Char('p') => {
                 if let Some(image_name) = self.get_selected_image() {
-                    self.pull_image(image_name).await?;
+                    self.pull_image(&image_name).await?;
                 }
             }
             KeyCode::Char('i') => {
                 if let Some(image_name) = self.get_selected_image() {
-                    self.inspect_image(image_name).await?;
+                    self.inspect_image(&image_name).await?;
                 }
             }
             _ => {}
@@ -163,11 +165,11 @@ impl Component for ImagesUI {
                 .enumerate()
                 .map(|(i, image)| {
                     let style = if i == self.selected_index {
-                        Style::default().fg(Color::Yellow).bg(Color::DarkGray)
+                        Style::default().fg(Color::LightYellow).bg(Color::DarkGray)
                     } else {
                         Style::default().fg(Color::White)
                     };
-                    ListItem::new(image.clone()).style(style)
+                    ListItem::new(get_name(image)).style(style)
                 })
                 .collect();
 
@@ -183,7 +185,7 @@ impl Component for ImagesUI {
         }
     }
 
-    fn render_help() -> &'static str {
+    fn render_help(&self) -> &'static str {
         "[↑/↓] Select   [D] Delete   [P] Pull   [I] Inspect   [R/F5] Refresh   [Q] Quit"
     }
 }

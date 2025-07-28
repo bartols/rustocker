@@ -9,14 +9,15 @@ use ratatui::{
 };
 use std::sync::Arc;
 use tokio::sync::Mutex;
-use tokio_util::sync::CancellationToken;
+
+use async_trait::async_trait;
 
 pub struct ContainersUI {
     tab_num: usize,
     docker_client: Arc<Mutex<DockerClient>>,
     selected_index: usize,
     containers: Vec<String>,
-    cancellation_token: CancellationToken,
+    last_tick: std::time::Instant,
 }
 
 impl ContainersUI {
@@ -26,7 +27,7 @@ impl ContainersUI {
             docker_client,
             selected_index: 0,
             containers: Vec::new(),
-            cancellation_token: CancellationToken::new(),
+            last_tick: std::time::Instant::now(),
         }
     }
 
@@ -91,6 +92,7 @@ impl ContainersUI {
     }
 }
 
+#[async_trait]
 impl Component for ContainersUI {
     fn name(&self) -> &str {
         "Containers"
@@ -101,34 +103,15 @@ impl Component for ContainersUI {
     }
 
     async fn start(&mut self) -> Result<()> {
-        let docker_client = Arc::clone(&self.docker_client);
-        let cancellation_token = self.cancellation_token.clone();
+        self.refresh_now().await
+    }
 
-        // Initial load
-        self.refresh_now().await?;
-
-        tokio::spawn(async move {
-            // Set up refresh interval (containers refresh every 5 seconds)
-            let mut interval = tokio::time::interval(tokio::time::Duration::from_secs(5));
-            interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
-
-            loop {
-                tokio::select! {
-                    _ = cancellation_token.cancelled() => {
-                        break;
-                    }
-                    _ = interval.tick() => {
-                        if let Err(e) = docker_client.lock().await.list_containers().await {
-                            eprintln!("Failed to refresh containers: {}", e);
-                        }
-                        // Note: Background refresh only logs errors
-                        // Manual refresh updates the UI data
-                    }
-                }
-            }
-        });
-
-        Ok(())
+    async fn tick(&mut self) {
+        let now = std::time::Instant::now();
+        if now.duration_since(self.last_tick).as_secs() >= 10 {
+            self.last_tick = now;
+            let _ = self.refresh_now().await;
+        }
     }
 
     async fn handle_input(&mut self, key: KeyCode) -> Result<()> {
@@ -181,7 +164,7 @@ impl Component for ContainersUI {
                 .enumerate()
                 .map(|(i, container)| {
                     let style = if i == self.selected_index {
-                        Style::default().fg(Color::Yellow).bg(Color::DarkGray)
+                        Style::default().fg(Color::LightYellow).bg(Color::DarkGray)
                     } else {
                         Style::default().fg(Color::White)
                     };
@@ -201,7 +184,7 @@ impl Component for ContainersUI {
         }
     }
 
-    fn render_help() -> &'static str {
+    fn render_help(&self) -> &'static str {
         "[↑/↓] Select   [S] Start/Stop   [L] Logs   [D] Delete   [R/F5] Refresh   [Q] Quit"
     }
 }

@@ -21,74 +21,11 @@ pub enum AppEvent {
     Error(String),
 }
 
-pub enum UIComponent {
-    Containers(ContainersUI),
-    Images(ImagesUI),
-    Networks(NetworksUI),
-    Volumes(VolumesUI),
-}
-
-impl UIComponent {
-    pub async fn start(&mut self) -> Result<()> {
-        match self {
-            UIComponent::Containers(ui) => ui.start().await,
-            UIComponent::Images(ui) => ui.start().await,
-            UIComponent::Networks(ui) => ui.start().await,
-            UIComponent::Volumes(ui) => ui.start().await,
-        }
-    }
-
-    pub async fn handle_input(&mut self, key: KeyCode) -> Result<()> {
-        match self {
-            UIComponent::Containers(ui) => ui.handle_input(key).await,
-            UIComponent::Images(ui) => ui.handle_input(key).await,
-            UIComponent::Networks(ui) => ui.handle_input(key).await,
-            UIComponent::Volumes(ui) => ui.handle_input(key).await,
-        }
-    }
-
-    pub fn name(&self) -> &str {
-        match self {
-            UIComponent::Containers(ui) => ui.name(),
-            UIComponent::Images(ui) => ui.name(),
-            UIComponent::Networks(ui) => ui.name(),
-            UIComponent::Volumes(ui) => ui.name(),
-        }
-    }
-
-    pub fn tab(&self) -> usize {
-        match self {
-            UIComponent::Containers(ui) => ui.tab(),
-            UIComponent::Images(ui) => ui.tab(),
-            UIComponent::Networks(ui) => ui.tab(),
-            UIComponent::Volumes(ui) => ui.tab(),
-        }
-    }
-
-    pub fn render(&self, f: &mut ratatui::Frame, area: ratatui::layout::Rect) {
-        match self {
-            UIComponent::Containers(ui) => ui.render(f, area),
-            UIComponent::Images(ui) => ui.render(f, area),
-            UIComponent::Networks(ui) => ui.render(f, area),
-            UIComponent::Volumes(ui) => ui.render(f, area),
-        }
-    }
-
-    pub fn render_help(&self) -> &'static str {
-        match self {
-            UIComponent::Containers(_) => ContainersUI::render_help(),
-            UIComponent::Images(_) => ImagesUI::render_help(),
-            UIComponent::Networks(_) => NetworksUI::render_help(),
-            UIComponent::Volumes(_) => VolumesUI::render_help(),
-        }
-    }
-}
-
 pub struct App {
     pub active_tab: usize,
     pub should_quit: bool,
     // UI modules
-    pub components: Vec<UIComponent>,
+    pub components: Vec<Box<dyn Component>>,
     // Event handling
     event_rx: mpsc::UnboundedReceiver<AppEvent>,
     event_tx: mpsc::UnboundedSender<AppEvent>,
@@ -109,11 +46,11 @@ impl App {
         let networks_ui = NetworksUI::new(Arc::clone(&docker_client), 2);
         let volumes_ui = VolumesUI::new(docker_client, 3);
 
-        let components = vec![
-            UIComponent::Containers(containers_ui),
-            UIComponent::Images(images_ui),
-            UIComponent::Networks(networks_ui),
-            UIComponent::Volumes(volumes_ui),
+        let components: Vec<Box<dyn Component>> = vec![
+            Box::new(containers_ui),
+            Box::new(images_ui),
+            Box::new(networks_ui),
+            Box::new(volumes_ui),
         ];
 
         Ok(Self {
@@ -138,14 +75,26 @@ impl App {
         // Start input task
         self.start_input_task()?;
 
+        let mut interval = tokio::time::interval(tokio::time::Duration::from_secs(1));
+
         // Main event loop
         while !self.should_quit {
             // Draw the UI
             terminal.draw(|frame| crate::ui::draw_ui(frame, self))?;
 
-            // Handle events
-            if let Some(event) = self.event_rx.recv().await {
-                self.handle_event(event).await?;
+            tokio::select! {
+                _ = interval.tick() => {
+                    for component in &mut self.components {
+                        component.tick().await;
+                    }
+                }
+
+                // Handle events
+                event = self.event_rx.recv() => {
+                    if let Some(event) = event {
+                        self.handle_event(event).await?;
+                    }
+                }
             }
         }
 

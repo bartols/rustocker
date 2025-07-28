@@ -1,6 +1,7 @@
 use crate::components::Component;
 use crate::docker::DockerClient;
 
+use async_trait::async_trait;
 use color_eyre::Result;
 use crossterm::event::KeyCode;
 use ratatui::{
@@ -16,6 +17,7 @@ pub struct VolumesUI {
     docker_client: Arc<Mutex<DockerClient>>,
     selected_index: usize,
     volumes: Vec<String>,
+    last_tick: std::time::Instant,
 }
 
 impl VolumesUI {
@@ -25,6 +27,7 @@ impl VolumesUI {
             docker_client,
             selected_index: 0,
             volumes: Vec::new(),
+            last_tick: std::time::Instant::now(),
         }
     }
 
@@ -72,6 +75,7 @@ impl VolumesUI {
     }
 }
 
+#[async_trait]
 impl Component for VolumesUI {
     fn name(&self) -> &str {
         "Volumes"
@@ -82,25 +86,15 @@ impl Component for VolumesUI {
     }
 
     async fn start(&mut self) -> Result<()> {
-        // let docker_client = Arc::clone(&self.docker_client);
-
-        // tokio::spawn(async move {
-        //     // Set up refresh interval (volumes refresh every 30 seconds - very infrequent)
-        //     let mut interval = tokio::time::interval(tokio::time::Duration::from_secs(30));
-
-        //     loop {
-        //         tokio::select! {
-        //             _ = interval.tick() => {
-        //                 if let Err(e) = docker_client.lock().await.list_volumes().await {
-        //                     eprintln!("Failed to refresh volumes: {}", e);
-        //                 }
-        //             }
-        //         }
-        //     }
-        // });
-
-        // Ok(())
         self.refresh_now().await
+    }
+
+    async fn tick(&mut self) {
+        let now = std::time::Instant::now();
+        if now.duration_since(self.last_tick).as_secs() >= 10 {
+            self.last_tick = now;
+            let _ = self.refresh_now().await;
+        }
     }
 
     async fn handle_input(&mut self, key: KeyCode) -> Result<()> {
@@ -150,7 +144,7 @@ impl Component for VolumesUI {
                 .enumerate()
                 .map(|(i, volume)| {
                     let style = if i == self.selected_index {
-                        Style::default().fg(Color::Yellow).bg(Color::DarkGray)
+                        Style::default().fg(Color::LightYellow).bg(Color::DarkGray)
                     } else {
                         Style::default().fg(Color::White)
                     };
@@ -170,7 +164,7 @@ impl Component for VolumesUI {
         }
     }
 
-    fn render_help() -> &'static str {
+    fn render_help(&self) -> &'static str {
         "[↑/↓] Select   [C] Create   [D] Delete   [I] Inspect   [R/F5] Refresh   [Q] Quit"
     }
 }

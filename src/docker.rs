@@ -1,12 +1,15 @@
-use bollard::image::ListImagesOptions;
-use bollard::network::ListNetworksOptions;
-use bollard::query_parameters::ListContainersOptions;
-use bollard::volume::ListVolumesOptions;
+use bollard::models::ImageSummary;
+use bollard::models::SystemVersion;
+use bollard::query_parameters::{
+    ListContainersOptions, ListImagesOptionsBuilder, ListNetworksOptionsBuilder,
+    ListVolumesOptionsBuilder,
+};
 use bollard::{API_DEFAULT_VERSION, Docker};
 use std::collections::HashMap;
 
 pub struct DockerClient {
     docker: Docker,
+    pub version: SystemVersion,
 }
 
 impl DockerClient {
@@ -14,10 +17,25 @@ impl DockerClient {
         // Try to connect to Docker daemon
         let docker = Docker::connect_with_local_defaults()?;
 
-        // Test the connection
-        let _version = docker.version().await?;
+        // get version
+        let version = docker.version().await?;
 
-        Ok(Self { docker })
+        println!("Connected to Docker version: {:?}", version);
+
+        Ok(Self { docker, version })
+    }
+
+    pub async fn connect(host: &str, timeout: u64) -> Result<Self, bollard::errors::Error> {
+        // Format the host as a proper URL
+        let host_url = format!("tcp://{}", host);
+
+        // Connect using HTTP (no SSL)
+        let docker = Docker::connect_with_http(&host_url, timeout, bollard::API_DEFAULT_VERSION)?;
+
+        // get version
+        let version = docker.version().await?;
+
+        Ok(Self { docker, version })
     }
 
     pub async fn list_containers(&self) -> Result<Vec<String>, bollard::errors::Error> {
@@ -42,40 +60,15 @@ impl DockerClient {
             .collect())
     }
 
-    pub async fn list_images(&self) -> Result<Vec<String>, bollard::errors::Error> {
-        let options = Some(ListImagesOptions::<String> {
-            all: false,
-            ..Default::default()
-        });
-
-        let images = self.docker.list_images(options).await?;
-
-        Ok(images
-            .into_iter()
-            .filter_map(|image| {
-                // Get repository tags or use image ID
-                let tags = image.repo_tags;
-                if !tags.is_empty() && tags[0] != "<none>:<none>" {
-                    Some(tags[0].clone())
-                } else {
-                    // Use first 12 chars of image ID as fallback
-                    let id = image.id.clone();
-                    if id.len() > 12 {
-                        Some(format!("{}...", &id[7..19])) // Skip "sha256:" prefix
-                    } else {
-                        Some(id)
-                    }
-                }
-            })
-            .collect())
+    pub async fn list_images(&self) -> Result<Vec<ImageSummary>, bollard::errors::Error> {
+        let options = ListImagesOptionsBuilder::new().all(true).build();
+        self.docker.list_images(Some(options)).await
     }
 
     pub async fn list_networks(&self) -> Result<Vec<String>, bollard::errors::Error> {
-        let options = Some(ListNetworksOptions::<String> {
-            ..Default::default()
-        });
+        let options = ListNetworksOptionsBuilder::new().build();
 
-        let networks = self.docker.list_networks(options).await?;
+        let networks = self.docker.list_networks(Some(options)).await?;
 
         Ok(networks
             .into_iter()
@@ -84,11 +77,9 @@ impl DockerClient {
     }
 
     pub async fn list_volumes(&self) -> Result<Vec<String>, bollard::errors::Error> {
-        let options = Some(ListVolumesOptions::<String> {
-            ..Default::default()
-        });
+        let options = ListVolumesOptionsBuilder::new().build();
 
-        let response = self.docker.list_volumes(options).await?;
+        let response = self.docker.list_volumes(Some(options)).await?;
 
         Ok(response
             .volumes

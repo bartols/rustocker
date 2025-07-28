@@ -1,5 +1,6 @@
 use crate::components::Component;
 use crate::docker::DockerClient;
+use async_trait::async_trait;
 use color_eyre::Result;
 use crossterm::event::KeyCode;
 use ratatui::{
@@ -9,14 +10,13 @@ use ratatui::{
 };
 use std::sync::Arc;
 use tokio::sync::Mutex;
-use tokio_util::sync::CancellationToken;
 
 pub struct NetworksUI {
     tab_num: usize,
     docker_client: Arc<Mutex<DockerClient>>,
     selected_index: usize,
     networks: Vec<String>,
-    cancellation_token: CancellationToken,
+    last_tick: std::time::Instant,
 }
 
 impl NetworksUI {
@@ -26,7 +26,7 @@ impl NetworksUI {
             docker_client,
             selected_index: 0,
             networks: Vec::new(),
-            cancellation_token: CancellationToken::new(),
+            last_tick: std::time::Instant::now(),
         }
     }
 
@@ -74,6 +74,7 @@ impl NetworksUI {
     }
 }
 
+#[async_trait]
 impl Component for NetworksUI {
     fn name(&self) -> &str {
         "Networks"
@@ -84,33 +85,15 @@ impl Component for NetworksUI {
     }
 
     async fn start(&mut self) -> Result<()> {
-        let docker_client = Arc::clone(&self.docker_client);
-        let cancellation_token = self.cancellation_token.clone();
+        self.refresh_now().await
+    }
 
-        // Initial load
-        self.refresh_now().await?;
-
-        tokio::spawn(async move {
-            // Set up refresh interval (networks refresh every 20 seconds - infrequent)
-            let mut interval = tokio::time::interval(tokio::time::Duration::from_secs(20));
-
-            loop {
-                tokio::select! {
-                    _ = cancellation_token.cancelled() => {
-                        break;
-                    }
-                    _ = interval.tick() => {
-                        if let Err(e) = docker_client.lock().await.list_networks().await {
-                            eprintln!("Failed to refresh networks: {}", e);
-                        }
-                        // Note: Background refresh only logs errors
-                        // Manual refresh updates the UI data
-                    }
-                }
-            }
-        });
-
-        Ok(())
+    async fn tick(&mut self) {
+        let now = std::time::Instant::now();
+        if now.duration_since(self.last_tick).as_secs() >= 10 {
+            self.last_tick = now;
+            let _ = self.refresh_now().await;
+        }
     }
 
     async fn handle_input(&mut self, key: KeyCode) -> Result<()> {
@@ -160,7 +143,7 @@ impl Component for NetworksUI {
                 .enumerate()
                 .map(|(i, network)| {
                     let style = if i == self.selected_index {
-                        Style::default().fg(Color::Yellow).bg(Color::DarkGray)
+                        Style::default().fg(Color::LightYellow).bg(Color::DarkGray)
                     } else {
                         Style::default().fg(Color::White)
                     };
@@ -180,7 +163,7 @@ impl Component for NetworksUI {
         }
     }
 
-    fn render_help() -> &'static str {
+    fn render_help(&self) -> &'static str {
         "[↑/↓] Select   [C] Create   [D] Delete   [I] Inspect   [R/F5] Refresh   [Q] Quit"
     }
 }
