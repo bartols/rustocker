@@ -1,115 +1,189 @@
-use crate::app::App;
+use crate::components::Component;
+use crate::docker::DockerClient;
+use color_eyre::Result;
+use crossterm::event::KeyCode;
 use ratatui::{
     Frame,
     style::{Color, Style},
     widgets::{Block, Borders, List, ListItem, Paragraph},
 };
+use std::sync::Arc;
+use tokio::sync::Mutex;
+use tokio_util::sync::CancellationToken;
 
-pub fn render_images(f: &mut Frame, area: ratatui::layout::Rect, app: &App) {
-    if app.images.is_empty() {
-        let paragraph = Paragraph::new("No images found or loading...")
-            .block(Block::default().title("Images").borders(Borders::ALL))
-            .style(Style::default().fg(Color::DarkGray));
-        f.render_widget(paragraph, area);
-    } else {
-        let items: Vec<ListItem> = app
-            .images
-            .iter()
-            .map(|image| ListItem::new(image.clone()).style(Style::default().fg(Color::White)))
-            .collect();
+pub struct ImagesUI {
+    tab_num: usize,
+    docker_client: Arc<Mutex<DockerClient>>,
+    selected_index: usize,
+    images: Vec<String>,
+    cancellation_token: CancellationToken,
+}
 
-        let list = List::new(items)
-            .block(
-                Block::default()
-                    .title(format!("Images ({})", app.images.len()))
-                    .borders(Borders::ALL),
-            )
-            .style(Style::default());
+impl ImagesUI {
+    pub fn new(docker_client: Arc<Mutex<DockerClient>>, tab_num: usize) -> Self {
+        Self {
+            tab_num,
+            docker_client,
+            selected_index: 0,
+            images: Vec::new(),
+            cancellation_token: CancellationToken::new(),
+        }
+    }
 
-        f.render_widget(list, area);
+    async fn refresh_now(&mut self) -> Result<()> {
+        let client = self.docker_client.lock().await;
+        match client.list_images().await {
+            Ok(images) => {
+                self.images = images;
+                // Adjust selected index if necessary
+                if self.selected_index >= self.images.len() && !self.images.is_empty() {
+                    self.selected_index = self.images.len() - 1;
+                }
+                Ok(())
+            }
+            Err(e) => {
+                eprintln!("Failed to refresh images: {}", e);
+                Err(e.into())
+            }
+        }
+    }
+
+    fn get_selected_image(&self) -> Option<&String> {
+        self.images.get(self.selected_index)
+    }
+
+    async fn delete_image(&self, image_name: &str) -> Result<()> {
+        eprintln!("Deleting image: {}", image_name);
+        // TODO: Implement image deletion
+        // Should ask for confirmation and handle dependencies
+        Ok(())
+    }
+
+    async fn pull_image(&self, image_name: &str) -> Result<()> {
+        eprintln!("Pulling image: {}", image_name);
+        // TODO: Implement image pull
+        // Should show progress if possible
+        Ok(())
+    }
+
+    async fn inspect_image(&self, image_name: &str) -> Result<()> {
+        eprintln!("Inspecting image: {}", image_name);
+        // TODO: Implement image inspection
+        // Show detailed info in a popup or new view
+        Ok(())
     }
 }
 
-pub fn render_images_help() -> &'static str {
-    "[←/→] Switch Tab   [R/F5] Refresh   [D] Delete Image   [Q/Esc/Ctrl+C] Quit"
-}
-
-// Future enhancement: render with detailed image information
-#[allow(dead_code)]
-pub fn render_images_detailed(f: &mut Frame, area: ratatui::layout::Rect, app: &App) {
-    use ratatui::{
-        layout::{Constraint, Direction, Layout},
-        text::{Line, Span},
-    };
-
-    if app.images.is_empty() {
-        let paragraph = Paragraph::new("No images found or loading...")
-            .block(Block::default().title("Images").borders(Borders::ALL))
-            .style(Style::default().fg(Color::DarkGray));
-        f.render_widget(paragraph, area);
-        return;
+impl Component for ImagesUI {
+    fn name(&self) -> &str {
+        "Images"
     }
 
-    // Split area for image list and details
-    let chunks = Layout::default()
-        .direction(Direction::Horizontal)
-        .constraints([Constraint::Percentage(60), Constraint::Percentage(40)])
-        .split(area);
+    fn tab(&self) -> usize {
+        self.tab_num
+    }
 
-    // Image list (left side)
-    let items: Vec<ListItem> = app
-        .images
-        .iter()
-        .enumerate()
-        .map(|(i, image)| {
-            let style = if i == 0 {
-                // Highlight first image (selected)
-                Style::default().fg(Color::Yellow)
-            } else {
-                Style::default().fg(Color::White)
-            };
+    async fn start(&mut self) -> Result<()> {
+        let docker_client = Arc::clone(&self.docker_client);
+        let cancellation_token = self.cancellation_token.clone();
 
-            ListItem::new(image.clone()).style(style)
-        })
-        .collect();
+        // Initial load
+        self.refresh_now().await?;
 
-    let list = List::new(items)
-        .block(
-            Block::default()
-                .title(format!("Images ({})", app.images.len()))
-                .borders(Borders::ALL),
-        )
-        .style(Style::default());
+        tokio::spawn(async move {
+            // Set up refresh interval (images refresh every 15 seconds - less frequent)
+            let mut interval = tokio::time::interval(tokio::time::Duration::from_secs(15));
+            interval.reset();
 
-    f.render_widget(list, chunks[0]);
+            loop {
+                tokio::select! {
+                    _ = cancellation_token.cancelled() => {
+                        break;
+                    }
+                    _ = interval.tick() => {
+                        if let Err(e) = docker_client.lock().await.list_images().await {
+                            eprintln!("Failed to refresh images: {}", e);
+                        }
+                        // Note: Background refresh only logs errors
+                        // Manual refresh updates the UI data
+                    }
+                }
+            }
+        });
 
-    // Image details (right side)
-    let details = if let Some(selected_image) = app.images.first() {
-        vec![
-            Line::from(vec![
-                Span::styled("Repository: ", Style::default().fg(Color::Blue)),
-                Span::raw(selected_image),
-            ]),
-            Line::from(vec![
-                Span::styled("Tag: ", Style::default().fg(Color::Blue)),
-                Span::raw("latest"),
-            ]),
-            Line::from(vec![
-                Span::styled("Size: ", Style::default().fg(Color::Blue)),
-                Span::raw("~500MB"),
-            ]),
-        ]
-    } else {
-        vec![Line::from("No image selected")]
-    };
+        Ok(())
+    }
 
-    let details_paragraph = Paragraph::new(details)
-        .block(
-            Block::default()
-                .title("Image Details")
-                .borders(Borders::ALL),
-        )
-        .style(Style::default());
+    async fn handle_input(&mut self, key: KeyCode) -> Result<()> {
+        match key {
+            KeyCode::Up => {
+                if self.selected_index > 0 {
+                    self.selected_index -= 1;
+                }
+            }
+            KeyCode::Down => {
+                if self.selected_index < self.images.len().saturating_sub(1) {
+                    self.selected_index += 1;
+                }
+            }
+            KeyCode::Char('r') | KeyCode::F(5) => {
+                // Manual refresh for images only
+                self.refresh_now().await?;
+            }
+            KeyCode::Char('d') => {
+                if let Some(image_name) = self.get_selected_image() {
+                    self.delete_image(image_name).await?;
+                }
+            }
+            KeyCode::Char('p') => {
+                if let Some(image_name) = self.get_selected_image() {
+                    self.pull_image(image_name).await?;
+                }
+            }
+            KeyCode::Char('i') => {
+                if let Some(image_name) = self.get_selected_image() {
+                    self.inspect_image(image_name).await?;
+                }
+            }
+            _ => {}
+        }
+        Ok(())
+    }
 
-    f.render_widget(details_paragraph, chunks[1]);
+    fn render(&self, f: &mut Frame, area: ratatui::layout::Rect) {
+        if self.images.is_empty() {
+            let paragraph = Paragraph::new("No images found or loading...")
+                .block(Block::default().title("Images").borders(Borders::ALL))
+                .style(Style::default().fg(Color::DarkGray));
+            f.render_widget(paragraph, area);
+        } else {
+            let items: Vec<ListItem> = self
+                .images
+                .iter()
+                .enumerate()
+                .map(|(i, image)| {
+                    let style = if i == self.selected_index {
+                        Style::default().fg(Color::Yellow).bg(Color::DarkGray)
+                    } else {
+                        Style::default().fg(Color::White)
+                    };
+                    ListItem::new(image.clone()).style(style)
+                })
+                .collect();
+
+            let list = List::new(items)
+                .block(
+                    Block::default()
+                        .title(format!("Images ({})", self.images.len()))
+                        .borders(Borders::ALL),
+                )
+                .style(Style::default());
+
+            f.render_widget(list, area);
+        }
+    }
+
+    fn render_help() -> &'static str {
+        "[↑/↓] Select   [D] Delete   [P] Pull   [I] Inspect   [R/F5] Refresh   [Q] Quit"
+    }
 }

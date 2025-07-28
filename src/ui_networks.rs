@@ -1,115 +1,186 @@
-use crate::app::App;
+use crate::components::Component;
+use crate::docker::DockerClient;
+use color_eyre::Result;
+use crossterm::event::KeyCode;
 use ratatui::{
     Frame,
     style::{Color, Style},
     widgets::{Block, Borders, List, ListItem, Paragraph},
 };
+use std::sync::Arc;
+use tokio::sync::Mutex;
+use tokio_util::sync::CancellationToken;
 
-pub fn render_networks(f: &mut Frame, area: ratatui::layout::Rect, app: &App) {
-    if app.networks.is_empty() {
-        let paragraph = Paragraph::new("No networks found or loading...")
-            .block(Block::default().title("Networks").borders(Borders::ALL))
-            .style(Style::default().fg(Color::DarkGray));
-        f.render_widget(paragraph, area);
-    } else {
-        let items: Vec<ListItem> = app
-            .networks
-            .iter()
-            .map(|network| ListItem::new(network.clone()).style(Style::default().fg(Color::White)))
-            .collect();
+pub struct NetworksUI {
+    tab_num: usize,
+    docker_client: Arc<Mutex<DockerClient>>,
+    selected_index: usize,
+    networks: Vec<String>,
+    cancellation_token: CancellationToken,
+}
 
-        let list = List::new(items)
-            .block(
-                Block::default()
-                    .title(format!("Networks ({})", app.networks.len()))
-                    .borders(Borders::ALL),
-            )
-            .style(Style::default());
+impl NetworksUI {
+    pub fn new(docker_client: Arc<Mutex<DockerClient>>, tab_num: usize) -> Self {
+        Self {
+            tab_num,
+            docker_client,
+            selected_index: 0,
+            networks: Vec::new(),
+            cancellation_token: CancellationToken::new(),
+        }
+    }
 
-        f.render_widget(list, area);
+    async fn refresh_now(&mut self) -> Result<()> {
+        let client = self.docker_client.lock().await;
+        match client.list_networks().await {
+            Ok(networks) => {
+                self.networks = networks;
+                // Adjust selected index if necessary
+                if self.selected_index >= self.networks.len() && !self.networks.is_empty() {
+                    self.selected_index = self.networks.len() - 1;
+                }
+                Ok(())
+            }
+            Err(e) => {
+                eprintln!("Failed to refresh networks: {}", e);
+                Err(e.into())
+            }
+        }
+    }
+
+    fn get_selected_network(&self) -> Option<&String> {
+        self.networks.get(self.selected_index)
+    }
+
+    async fn delete_network(&self, network_name: &str) -> Result<()> {
+        eprintln!("Deleting network: {}", network_name);
+        // TODO: Implement network deletion
+        // Should check if network is in use and ask for confirmation
+        Ok(())
+    }
+
+    async fn create_network(&self) -> Result<()> {
+        eprintln!("Creating new network...");
+        // TODO: Implement network creation
+        // Should probably show a dialog to input network name and options
+        Ok(())
+    }
+
+    async fn inspect_network(&self, network_name: &str) -> Result<()> {
+        eprintln!("Inspecting network: {}", network_name);
+        // TODO: Implement network inspection
+        // Show detailed info including connected containers
+        Ok(())
     }
 }
 
-pub fn render_networks_help() -> &'static str {
-    "[←/→] Switch Tab   [R/F5] Refresh   [C] Create Network   [D] Delete   [Q/Esc/Ctrl+C] Quit"
-}
-
-// Future enhancement: render with detailed network information
-#[allow(dead_code)]
-pub fn render_networks_detailed(f: &mut Frame, area: ratatui::layout::Rect, app: &App) {
-    use ratatui::{
-        layout::{Constraint, Direction, Layout},
-        text::{Line, Span},
-    };
-
-    if app.networks.is_empty() {
-        let paragraph = Paragraph::new("No networks found or loading...")
-            .block(Block::default().title("Networks").borders(Borders::ALL))
-            .style(Style::default().fg(Color::DarkGray));
-        f.render_widget(paragraph, area);
-        return;
+impl Component for NetworksUI {
+    fn name(&self) -> &str {
+        "Networks"
     }
 
-    // Split area for network list and details
-    let chunks = Layout::default()
-        .direction(Direction::Horizontal)
-        .constraints([Constraint::Percentage(60), Constraint::Percentage(40)])
-        .split(area);
+    fn tab(&self) -> usize {
+        self.tab_num
+    }
 
-    // Network list (left side)
-    let items: Vec<ListItem> = app
-        .networks
-        .iter()
-        .enumerate()
-        .map(|(i, network)| {
-            let style = if i == 0 {
-                // Highlight first network (selected)
-                Style::default().fg(Color::Yellow)
-            } else {
-                Style::default().fg(Color::White)
-            };
+    async fn start(&mut self) -> Result<()> {
+        let docker_client = Arc::clone(&self.docker_client);
+        let cancellation_token = self.cancellation_token.clone();
 
-            ListItem::new(network.clone()).style(style)
-        })
-        .collect();
+        // Initial load
+        self.refresh_now().await?;
 
-    let list = List::new(items)
-        .block(
-            Block::default()
-                .title(format!("Networks ({})", app.networks.len()))
-                .borders(Borders::ALL),
-        )
-        .style(Style::default());
+        tokio::spawn(async move {
+            // Set up refresh interval (networks refresh every 20 seconds - infrequent)
+            let mut interval = tokio::time::interval(tokio::time::Duration::from_secs(20));
 
-    f.render_widget(list, chunks[0]);
+            loop {
+                tokio::select! {
+                    _ = cancellation_token.cancelled() => {
+                        break;
+                    }
+                    _ = interval.tick() => {
+                        if let Err(e) = docker_client.lock().await.list_networks().await {
+                            eprintln!("Failed to refresh networks: {}", e);
+                        }
+                        // Note: Background refresh only logs errors
+                        // Manual refresh updates the UI data
+                    }
+                }
+            }
+        });
 
-    // Network details (right side)
-    let details = if let Some(selected_network) = app.networks.first() {
-        vec![
-            Line::from(vec![
-                Span::styled("Name: ", Style::default().fg(Color::Blue)),
-                Span::raw(selected_network),
-            ]),
-            Line::from(vec![
-                Span::styled("Driver: ", Style::default().fg(Color::Blue)),
-                Span::raw("bridge"),
-            ]),
-            Line::from(vec![
-                Span::styled("Scope: ", Style::default().fg(Color::Blue)),
-                Span::raw("local"),
-            ]),
-        ]
-    } else {
-        vec![Line::from("No network selected")]
-    };
+        Ok(())
+    }
 
-    let details_paragraph = Paragraph::new(details)
-        .block(
-            Block::default()
-                .title("Network Details")
-                .borders(Borders::ALL),
-        )
-        .style(Style::default());
+    async fn handle_input(&mut self, key: KeyCode) -> Result<()> {
+        match key {
+            KeyCode::Up => {
+                if self.selected_index > 0 {
+                    self.selected_index -= 1;
+                }
+            }
+            KeyCode::Down => {
+                if self.selected_index < self.networks.len().saturating_sub(1) {
+                    self.selected_index += 1;
+                }
+            }
+            KeyCode::Char('r') | KeyCode::F(5) => {
+                // Manual refresh for networks only
+                self.refresh_now().await?;
+            }
+            KeyCode::Char('d') => {
+                if let Some(network_name) = self.get_selected_network() {
+                    self.delete_network(network_name).await?;
+                }
+            }
+            KeyCode::Char('c') => {
+                self.create_network().await?;
+            }
+            KeyCode::Char('i') => {
+                if let Some(network_name) = self.get_selected_network() {
+                    self.inspect_network(network_name).await?;
+                }
+            }
+            _ => {}
+        }
+        Ok(())
+    }
 
-    f.render_widget(details_paragraph, chunks[1]);
+    fn render(&self, f: &mut Frame, area: ratatui::layout::Rect) {
+        if self.networks.is_empty() {
+            let paragraph = Paragraph::new("No networks found or loading...")
+                .block(Block::default().title("Networks").borders(Borders::ALL))
+                .style(Style::default().fg(Color::DarkGray));
+            f.render_widget(paragraph, area);
+        } else {
+            let items: Vec<ListItem> = self
+                .networks
+                .iter()
+                .enumerate()
+                .map(|(i, network)| {
+                    let style = if i == self.selected_index {
+                        Style::default().fg(Color::Yellow).bg(Color::DarkGray)
+                    } else {
+                        Style::default().fg(Color::White)
+                    };
+                    ListItem::new(network.clone()).style(style)
+                })
+                .collect();
+
+            let list = List::new(items)
+                .block(
+                    Block::default()
+                        .title(format!("Networks ({})", self.networks.len()))
+                        .borders(Borders::ALL),
+                )
+                .style(Style::default());
+
+            f.render_widget(list, area);
+        }
+    }
+
+    fn render_help() -> &'static str {
+        "[↑/↓] Select   [C] Create   [D] Delete   [I] Inspect   [R/F5] Refresh   [Q] Quit"
+    }
 }

@@ -1,4 +1,5 @@
 mod app;
+mod components;
 mod docker;
 mod ui;
 mod ui_containers;

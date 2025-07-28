@@ -1,4 +1,10 @@
+use crate::components::Component;
 use crate::docker::DockerClient;
+use crate::{
+    ui_containers::ContainersUI, ui_images::ImagesUI, ui_networks::NetworksUI,
+    ui_volumes::VolumesUI,
+};
+
 use color_eyre::Result;
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 use futures::{FutureExt, StreamExt};
@@ -11,27 +17,78 @@ use tokio_util::sync::CancellationToken;
 pub enum AppEvent {
     // Key events
     Key(KeyEvent),
-    // Docker events
-    ContainersUpdated(Vec<String>),
-    ImagesUpdated(Vec<String>),
-    NetworksUpdated(Vec<String>),
-    VolumesUpdated(Vec<String>),
-    // Manual refresh
-    RefreshRequested,
-    // Error events
+    // Error events (only global errors now)
     Error(String),
+}
+
+pub enum UIComponent {
+    Containers(ContainersUI),
+    Images(ImagesUI),
+    Networks(NetworksUI),
+    Volumes(VolumesUI),
+}
+
+impl UIComponent {
+    pub async fn start(&mut self) -> Result<()> {
+        match self {
+            UIComponent::Containers(ui) => ui.start().await,
+            UIComponent::Images(ui) => ui.start().await,
+            UIComponent::Networks(ui) => ui.start().await,
+            UIComponent::Volumes(ui) => ui.start().await,
+        }
+    }
+
+    pub async fn handle_input(&mut self, key: KeyCode) -> Result<()> {
+        match self {
+            UIComponent::Containers(ui) => ui.handle_input(key).await,
+            UIComponent::Images(ui) => ui.handle_input(key).await,
+            UIComponent::Networks(ui) => ui.handle_input(key).await,
+            UIComponent::Volumes(ui) => ui.handle_input(key).await,
+        }
+    }
+
+    pub fn name(&self) -> &str {
+        match self {
+            UIComponent::Containers(ui) => ui.name(),
+            UIComponent::Images(ui) => ui.name(),
+            UIComponent::Networks(ui) => ui.name(),
+            UIComponent::Volumes(ui) => ui.name(),
+        }
+    }
+
+    pub fn tab(&self) -> usize {
+        match self {
+            UIComponent::Containers(ui) => ui.tab(),
+            UIComponent::Images(ui) => ui.tab(),
+            UIComponent::Networks(ui) => ui.tab(),
+            UIComponent::Volumes(ui) => ui.tab(),
+        }
+    }
+
+    pub fn render(&self, f: &mut ratatui::Frame, area: ratatui::layout::Rect) {
+        match self {
+            UIComponent::Containers(ui) => ui.render(f, area),
+            UIComponent::Images(ui) => ui.render(f, area),
+            UIComponent::Networks(ui) => ui.render(f, area),
+            UIComponent::Volumes(ui) => ui.render(f, area),
+        }
+    }
+
+    pub fn render_help(&self) -> &'static str {
+        match self {
+            UIComponent::Containers(_) => ContainersUI::render_help(),
+            UIComponent::Images(_) => ImagesUI::render_help(),
+            UIComponent::Networks(_) => NetworksUI::render_help(),
+            UIComponent::Volumes(_) => VolumesUI::render_help(),
+        }
+    }
 }
 
 pub struct App {
     pub active_tab: usize,
     pub should_quit: bool,
-    // Docker data
-    pub containers: Vec<String>,
-    pub images: Vec<String>,
-    pub networks: Vec<String>,
-    pub volumes: Vec<String>,
-    // Shared Docker client
-    docker_client: Arc<Mutex<DockerClient>>,
+    // UI modules
+    pub components: Vec<UIComponent>,
     // Event handling
     event_rx: mpsc::UnboundedReceiver<AppEvent>,
     event_tx: mpsc::UnboundedSender<AppEvent>,
@@ -46,14 +103,23 @@ impl App {
         // Initialize shared Docker client
         let docker_client = Arc::new(Mutex::new(DockerClient::new().await?));
 
+        // Initialize UI modules with shared Docker client
+        let containers_ui = ContainersUI::new(Arc::clone(&docker_client), 0);
+        let images_ui = ImagesUI::new(Arc::clone(&docker_client), 1);
+        let networks_ui = NetworksUI::new(Arc::clone(&docker_client), 2);
+        let volumes_ui = VolumesUI::new(docker_client, 3);
+
+        let components = vec![
+            UIComponent::Containers(containers_ui),
+            UIComponent::Images(images_ui),
+            UIComponent::Networks(networks_ui),
+            UIComponent::Volumes(volumes_ui),
+        ];
+
         Ok(Self {
             active_tab: 0,
             should_quit: false,
-            containers: Vec::new(),
-            images: Vec::new(),
-            networks: Vec::new(),
-            volumes: Vec::new(),
-            docker_client,
+            components,
             event_rx,
             event_tx,
             cancellation_token,
@@ -64,8 +130,12 @@ impl App {
         // Initialize terminal
         let mut terminal = self.init_terminal()?;
 
-        // Start background tasks
-        self.start_docker_task().await?;
+        // Start background refresh tasks for each UI module
+        for component in &mut self.components {
+            component.start().await?;
+        }
+
+        // Start input task
         self.start_input_task()?;
 
         // Main event loop
@@ -88,136 +158,56 @@ impl App {
 
     async fn handle_event(&mut self, event: AppEvent) -> Result<()> {
         match event {
-            AppEvent::Key(key) => self.handle_key_event(key),
-            AppEvent::ContainersUpdated(containers) => {
-                self.containers = containers;
-            }
-            AppEvent::ImagesUpdated(images) => {
-                self.images = images;
-            }
-            AppEvent::NetworksUpdated(networks) => {
-                self.networks = networks;
-            }
-            AppEvent::VolumesUpdated(volumes) => {
-                self.volumes = volumes;
-            }
-            AppEvent::RefreshRequested => {
-                // Use the shared Docker client for immediate refresh
-                let docker_client = Arc::clone(&self.docker_client);
-                let event_tx = self.event_tx.clone();
+            AppEvent::Key(key) => {
+                // First check for global keys
+                if self.handle_global_key_event(key) {
+                    return Ok(());
+                }
 
-                tokio::spawn(async move {
-                    Self::fetch_all_docker_data(&docker_client, &event_tx).await;
-                });
+                // Then delegate to active UI module
+                if let Some(component) = self
+                    .components
+                    .iter_mut()
+                    .find(|c| c.tab() == self.active_tab)
+                {
+                    component.handle_input(key.code).await?;
+                }
             }
             AppEvent::Error(error) => {
-                // Log error or show in UI
-                eprintln!("Docker error: {}", error);
+                // Log global errors
+                eprintln!("Application error: {}", error);
             }
         }
         Ok(())
     }
 
-    fn handle_key_event(&mut self, key: KeyEvent) {
+    fn handle_global_key_event(&mut self, key: KeyEvent) -> bool {
         match key.code {
-            KeyCode::Char('q') => self.should_quit = true,
+            KeyCode::Char('q') => {
+                self.should_quit = true;
+                true
+            }
             KeyCode::Char('c') if key.modifiers.contains(KeyModifiers::CONTROL) => {
                 self.should_quit = true;
+                true
             }
-            KeyCode::Esc => self.should_quit = true,
-            KeyCode::Char('r') => {
-                // Manual refresh with 'r' key
-                let _ = self.event_tx.send(AppEvent::RefreshRequested);
-            }
-            KeyCode::F(5) => {
-                // Manual refresh with F5 key
-                let _ = self.event_tx.send(AppEvent::RefreshRequested);
+            KeyCode::Esc => {
+                self.should_quit = true;
+                true
             }
             KeyCode::Right => {
-                self.active_tab = (self.active_tab + 1) % 4;
+                self.active_tab = (self.active_tab + 1) % self.components.len();
+                true
             }
             KeyCode::Left => {
                 if self.active_tab == 0 {
-                    self.active_tab = 3;
+                    self.active_tab = self.components.len() - 1;
                 } else {
                     self.active_tab -= 1;
                 }
+                true
             }
-            _ => {}
-        }
-    }
-
-    async fn start_docker_task(&self) -> Result<()> {
-        let docker_client = Arc::clone(&self.docker_client);
-        let event_tx = self.event_tx.clone();
-        let cancellation_token = self.cancellation_token.clone();
-
-        tokio::spawn(async move {
-            // Load initial data
-            Self::fetch_all_docker_data(&docker_client, &event_tx).await;
-
-            // Set up periodic refresh (every 10 seconds)
-            let mut interval = tokio::time::interval(tokio::time::Duration::from_secs(10));
-
-            loop {
-                tokio::select! {
-                    _ = cancellation_token.cancelled() => {
-                        break;
-                    }
-                    _ = interval.tick() => {
-                        Self::fetch_all_docker_data(&docker_client, &event_tx).await;
-                    }
-                }
-            }
-        });
-
-        Ok(())
-    }
-
-    async fn fetch_all_docker_data(
-        docker_client: &Arc<Mutex<DockerClient>>,
-        event_tx: &mpsc::UnboundedSender<AppEvent>,
-    ) {
-        let client = docker_client.lock().await;
-
-        // Fetch containers
-        match client.list_containers().await {
-            Ok(containers) => {
-                let _ = event_tx.send(AppEvent::ContainersUpdated(containers));
-            }
-            Err(e) => {
-                let _ = event_tx.send(AppEvent::Error(format!("Failed to list containers: {}", e)));
-            }
-        }
-
-        // Fetch images
-        match client.list_images().await {
-            Ok(images) => {
-                let _ = event_tx.send(AppEvent::ImagesUpdated(images));
-            }
-            Err(e) => {
-                let _ = event_tx.send(AppEvent::Error(format!("Failed to list images: {}", e)));
-            }
-        }
-
-        // Fetch networks
-        match client.list_networks().await {
-            Ok(networks) => {
-                let _ = event_tx.send(AppEvent::NetworksUpdated(networks));
-            }
-            Err(e) => {
-                let _ = event_tx.send(AppEvent::Error(format!("Failed to list networks: {}", e)));
-            }
-        }
-
-        // Fetch volumes
-        match client.list_volumes().await {
-            Ok(volumes) => {
-                let _ = event_tx.send(AppEvent::VolumesUpdated(volumes));
-            }
-            Err(e) => {
-                let _ = event_tx.send(AppEvent::Error(format!("Failed to list volumes: {}", e)));
-            }
+            _ => false, // Not handled globally
         }
     }
 

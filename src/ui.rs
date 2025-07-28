@@ -1,5 +1,4 @@
 use crate::app::App;
-use crate::{ui_containers, ui_images, ui_networks, ui_volumes};
 
 use ratatui::{
     Frame,
@@ -22,9 +21,10 @@ pub fn draw_ui(f: &mut Frame, app: &App) {
         .split(size);
 
     // Create tabs
-    let titles = ["Containers", "Images", "Networks", "Volumes"]
+    let titles = app
+        .components
         .iter()
-        .map(|t| Line::from(vec![Span::raw(*t)]))
+        .map(|c| Line::from(vec![Span::raw(c.name())]))
         .collect::<Vec<_>>();
 
     let tabs = Tabs::new(titles)
@@ -34,27 +34,22 @@ pub fn draw_ui(f: &mut Frame, app: &App) {
 
     f.render_widget(tabs, chunks[0]);
 
-    // Render main content based on active tab
-    match app.active_tab {
-        0 => ui_containers::render_containers(f, chunks[1], app),
-        1 => ui_images::render_images(f, chunks[1], app),
-        2 => ui_networks::render_networks(f, chunks[1], app),
-        3 => ui_volumes::render_volumes(f, chunks[1], app),
-        _ => {
-            let main = Paragraph::new("Unknown tab")
-                .block(Block::default().title("Error").borders(Borders::ALL));
-            f.render_widget(main, chunks[1]);
-        }
+    // Render main content based on active tab using UI modules
+    if let Some(component) = app.components.iter().find(|c| c.tab() == app.active_tab) {
+        component.render(f, chunks[1]);
+    } else {
+        let main = Paragraph::new("Unknown tab")
+            .block(Block::default().title("Error").borders(Borders::ALL));
+        f.render_widget(main, chunks[1]);
     }
 
-    // Help text - changes based on active tab
-    let help_text = match app.active_tab {
-        0 => ui_containers::render_containers_help(),
-        1 => ui_images::render_images_help(),
-        2 => ui_networks::render_networks_help(),
-        3 => ui_volumes::render_volumes_help(),
-        _ => "[←/→] Switch Tab   [Q/Esc/Ctrl+C] Quit",
-    };
+    // Help text - changes based on active tab using UI modules
+    let help_text =
+        if let Some(component) = app.components.iter().find(|c| c.tab() == app.active_tab) {
+            component.render_help()
+        } else {
+            "[←/→] Switch Tab   [Q/Esc/Ctrl+C] Quit"
+        };
 
     let help = Paragraph::new(help_text).style(Style::default().fg(Color::DarkGray));
     f.render_widget(help, chunks[2]);
