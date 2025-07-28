@@ -114,39 +114,44 @@ impl Component for ContainersUI {
         }
     }
 
-    async fn handle_input(&mut self, key: KeyCode) -> Result<()> {
+    async fn handle_input(&mut self, key: KeyCode) -> Result<bool> {
         match key {
             KeyCode::Up => {
                 if self.selected_index > 0 {
                     self.selected_index -= 1;
                 }
+                Ok(true)
             }
             KeyCode::Down => {
                 if self.selected_index < self.containers.len().saturating_sub(1) {
                     self.selected_index += 1;
                 }
+                Ok(true)
             }
             KeyCode::Char('r') | KeyCode::F(5) => {
                 self.refresh_now().await?;
+                Ok(true)
             }
             KeyCode::Char('s') => {
                 if let Some(container_name) = self.get_selected_container() {
                     self.toggle_container_state(container_name).await?;
                 }
+                Ok(true)
             }
             KeyCode::Char('l') => {
                 if let Some(container_name) = self.get_selected_container() {
                     self.show_container_logs(container_name).await?;
                 }
+                Ok(true)
             }
             KeyCode::Char('d') => {
                 if let Some(container_name) = self.get_selected_container() {
                     self.delete_container(container_name).await?;
                 }
+                Ok(true)
             }
-            _ => {}
+            _ => Ok(false),
         }
-        Ok(())
     }
 
     fn render(&self, f: &mut Frame, area: ratatui::layout::Rect) {

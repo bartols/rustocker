@@ -96,38 +96,43 @@ impl Component for NetworksUI {
         }
     }
 
-    async fn handle_input(&mut self, key: KeyCode) -> Result<()> {
+    async fn handle_input(&mut self, key: KeyCode) -> Result<bool> {
         match key {
             KeyCode::Up => {
                 if self.selected_index > 0 {
                     self.selected_index -= 1;
                 }
+                Ok(true)
             }
             KeyCode::Down => {
                 if self.selected_index < self.networks.len().saturating_sub(1) {
                     self.selected_index += 1;
                 }
+                Ok(true)
             }
             KeyCode::Char('r') | KeyCode::F(5) => {
                 // Manual refresh for networks only
                 self.refresh_now().await?;
+                Ok(true)
             }
             KeyCode::Char('d') => {
                 if let Some(network_name) = self.get_selected_network() {
                     self.delete_network(network_name).await?;
                 }
+                Ok(true)
             }
             KeyCode::Char('c') => {
                 self.create_network().await?;
+                Ok(true)
             }
             KeyCode::Char('i') => {
                 if let Some(network_name) = self.get_selected_network() {
                     self.inspect_network(network_name).await?;
                 }
+                Ok(true)
             }
-            _ => {}
+            _ => Ok(false),
         }
-        Ok(())
     }
 
     fn render(&self, f: &mut Frame, area: ratatui::layout::Rect) {

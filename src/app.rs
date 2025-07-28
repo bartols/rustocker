@@ -108,18 +108,20 @@ impl App {
     async fn handle_event(&mut self, event: AppEvent) -> Result<()> {
         match event {
             AppEvent::Key(key) => {
-                // First check for global keys
-                if self.handle_global_key_event(key) {
-                    return Ok(());
-                }
-
-                // Then delegate to active UI module
+                // First try to delegate to active UI module
+                let mut handled = false;
                 if let Some(component) = self
                     .components
                     .iter_mut()
                     .find(|c| c.tab() == self.active_tab)
                 {
-                    component.handle_input(key.code).await?;
+                    // Component returns true if it handled the event
+                    handled = component.handle_input(key.code).await.unwrap_or(false);
+                }
+
+                // If component didn't handle it, try global keys
+                if !handled {
+                    self.handle_global_key_event(key);
                 }
             }
             AppEvent::Error(error) => {

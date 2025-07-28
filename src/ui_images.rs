@@ -9,9 +9,9 @@ use ratatui::{
     layout::{Alignment, Constraint, Direction, Layout},
     style::{Color, Style},
     text::{Line, Span},
-    widgets::{Block, Borders, Clear, Paragraph},
+    widgets::{Block, Borders, Clear, List, ListItem, Paragraph},
 };
-
+use std::collections::HashMap;
 use std::sync::Arc;
 use tokio::sync::Mutex;
 
@@ -252,32 +252,32 @@ impl ImagesUI {
         lines.push(Line::from(""));
 
         lines.push(Line::from(vec![
-            Span::styled("ID: ", Style::default().fg(Color::LightBlue)),
+            Span::styled("ID: ", Style::default().fg(Color::Blue)),
             Span::raw(&data.id),
         ]));
 
         lines.push(Line::from(vec![
-            Span::styled("Repository Tags: ", Style::default().fg(Color::LightBlue)),
+            Span::styled("Repository Tags: ", Style::default().fg(Color::Blue)),
             Span::raw(data.repo_tags.join(", ")),
         ]));
 
         lines.push(Line::from(vec![
-            Span::styled("Size: ", Style::default().fg(Color::LightBlue)),
+            Span::styled("Size: ", Style::default().fg(Color::Blue)),
             Span::raw(&data.size_formatted),
         ]));
 
         lines.push(Line::from(vec![
-            Span::styled("Created: ", Style::default().fg(Color::LightBlue)),
+            Span::styled("Created: ", Style::default().fg(Color::Blue)),
             Span::raw(&data.created_formatted),
         ]));
 
         lines.push(Line::from(vec![
-            Span::styled("Architecture: ", Style::default().fg(Color::LightBlue)),
+            Span::styled("Architecture: ", Style::default().fg(Color::Blue)),
             Span::raw(&data.architecture),
         ]));
 
         lines.push(Line::from(vec![
-            Span::styled("OS: ", Style::default().fg(Color::LightBlue)),
+            Span::styled("OS: ", Style::default().fg(Color::Blue)),
             Span::raw(&data.os),
         ]));
 
@@ -293,7 +293,7 @@ impl ImagesUI {
         if !data.env.is_empty() {
             lines.push(Line::from(vec![Span::styled(
                 "Environment Variables:",
-                Style::default().fg(Color::LightBlue),
+                Style::default().fg(Color::Blue),
             )]));
             for env in &data.env {
                 lines.push(Line::from(vec![Span::raw("  "), Span::raw(env)]));
@@ -303,28 +303,28 @@ impl ImagesUI {
 
         if !data.exposed_ports.is_empty() {
             lines.push(Line::from(vec![
-                Span::styled("Exposed Ports: ", Style::default().fg(Color::LightBlue)),
+                Span::styled("Exposed Ports: ", Style::default().fg(Color::Blue)),
                 Span::raw(data.exposed_ports.join(", ")),
             ]));
         }
 
         if !data.working_dir.is_empty() {
             lines.push(Line::from(vec![
-                Span::styled("Working Directory: ", Style::default().fg(Color::LightBlue)),
+                Span::styled("Working Directory: ", Style::default().fg(Color::Blue)),
                 Span::raw(&data.working_dir),
             ]));
         }
 
         if !data.entrypoint.is_empty() {
             lines.push(Line::from(vec![
-                Span::styled("Entrypoint: ", Style::default().fg(Color::LightBlue)),
+                Span::styled("Entrypoint: ", Style::default().fg(Color::Blue)),
                 Span::raw(data.entrypoint.join(" ")),
             ]));
         }
 
         if !data.cmd.is_empty() {
             lines.push(Line::from(vec![
-                Span::styled("Command: ", Style::default().fg(Color::LightBlue)),
+                Span::styled("Command: ", Style::default().fg(Color::Blue)),
                 Span::raw(data.cmd.join(" ")),
             ]));
         }
@@ -341,7 +341,7 @@ impl ImagesUI {
 
             for (key, value) in &data.labels {
                 lines.push(Line::from(vec![
-                    Span::styled(format!("{}: ", key), Style::default().fg(Color::LightBlue)),
+                    Span::styled(format!("{}: ", key), Style::default().fg(Color::Blue)),
                     Span::raw(value),
                 ]));
             }
@@ -373,19 +373,21 @@ impl Component for ImagesUI {
         }
     }
 
-    async fn handle_input(&mut self, key: KeyCode) -> Result<()> {
+    async fn handle_input(&mut self, key: KeyCode) -> Result<bool> {
         // Handle modal input first
         if self.show_inspect_modal {
             match key {
-                KeyCode::Char('i') => {
+                KeyCode::Esc => {
                     self.show_inspect_modal = false;
                     self.inspect_data = None;
                     self.inspect_scroll = 0;
+                    return Ok(true);
                 }
                 KeyCode::Up => {
                     if self.inspect_scroll > 0 {
                         self.inspect_scroll -= 1;
                     }
+                    return Ok(true);
                 }
                 KeyCode::Down => {
                     if let Some(inspect_data) = &self.inspect_data {
@@ -394,10 +396,12 @@ impl Component for ImagesUI {
                             self.inspect_scroll += 1;
                         }
                     }
+                    return Ok(true);
                 }
-                _ => {}
+                _ => {
+                    return Ok(true);
+                }
             }
-            return Ok(());
         }
 
         // Handle main table input
@@ -406,37 +410,42 @@ impl Component for ImagesUI {
                 if self.selected_index > 0 {
                     self.selected_index -= 1;
                 }
+                Ok(true)
             }
             KeyCode::Down => {
                 if self.selected_index < self.images.len().saturating_sub(1) {
                     self.selected_index += 1;
                 }
+                Ok(true)
             }
             KeyCode::Char('r') | KeyCode::F(5) => {
                 // Manual refresh for images only
                 self.refresh_now().await?;
+                Ok(true)
             }
             KeyCode::Char('d') => {
                 if let Some(image) = self.get_selected_image() {
                     let image = image.clone();
                     self.delete_image(&image).await?;
                 }
+                Ok(true)
             }
             KeyCode::Char('p') => {
                 if let Some(image) = self.get_selected_image() {
                     let image = image.clone();
                     self.pull_image(&image).await?;
                 }
+                Ok(true)
             }
             KeyCode::Char('i') => {
                 if let Some(image) = self.get_selected_image() {
                     let image = image.clone();
                     self.inspect_image(&image).await?;
                 }
+                Ok(true)
             }
-            _ => {}
+            _ => Ok(false),
         }
-        Ok(())
     }
 
     fn render(&self, f: &mut Frame, area: ratatui::layout::Rect) {

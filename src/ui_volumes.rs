@@ -97,38 +97,43 @@ impl Component for VolumesUI {
         }
     }
 
-    async fn handle_input(&mut self, key: KeyCode) -> Result<()> {
+    async fn handle_input(&mut self, key: KeyCode) -> Result<bool> {
         match key {
             KeyCode::Up => {
                 if self.selected_index > 0 {
                     self.selected_index -= 1;
                 }
+                Ok(true)
             }
             KeyCode::Down => {
                 if self.selected_index < self.volumes.len().saturating_sub(1) {
                     self.selected_index += 1;
                 }
+                Ok(true)
             }
             KeyCode::Char('r') | KeyCode::F(5) => {
                 // Manual refresh for volumes only
                 self.refresh_now().await?;
+                Ok(true)
             }
             KeyCode::Char('d') => {
                 if let Some(volume_name) = self.get_selected_volume() {
                     self.delete_volume(volume_name).await?;
                 }
+                Ok(true)
             }
             KeyCode::Char('c') => {
                 self.create_volume().await?;
+                Ok(true)
             }
             KeyCode::Char('i') => {
                 if let Some(volume_name) = self.get_selected_volume() {
                     self.inspect_volume(volume_name).await?;
                 }
+                Ok(true)
             }
-            _ => {}
+            _ => Ok(false),
         }
-        Ok(())
     }
 
     fn render(&self, f: &mut Frame, area: ratatui::layout::Rect) {
