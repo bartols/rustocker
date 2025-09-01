@@ -1,4 +1,5 @@
 use crate::app::App;
+use crate::theme::current_theme;
 
 use ratatui::{
     Frame,
@@ -9,7 +10,9 @@ use ratatui::{
 };
 
 pub fn draw_ui(f: &mut Frame, app: &App) {
+    let theme = current_theme();
     let size = f.area();
+
     let chunks = Layout::default()
         .direction(Direction::Vertical)
         .margin(1)
@@ -20,7 +23,7 @@ pub fn draw_ui(f: &mut Frame, app: &App) {
         ])
         .split(size);
 
-    // Create tabs
+    // Create tabs with theme
     let titles = app
         .components
         .iter()
@@ -29,8 +32,14 @@ pub fn draw_ui(f: &mut Frame, app: &App) {
 
     let tabs = Tabs::new(titles)
         .select(app.active_tab)
-        .block(Block::default().title("Docker TUI").borders(Borders::ALL))
-        .highlight_style(Style::default().fg(Color::Yellow));
+        .block(
+            Block::default()
+                .title("Docker TUI")
+                .borders(Borders::ALL)
+                .border_style(theme.border_style()),
+        )
+        .style(theme.normal_style())
+        .highlight_style(theme.selected_style());
 
     f.render_widget(tabs, chunks[0]);
 
@@ -39,7 +48,13 @@ pub fn draw_ui(f: &mut Frame, app: &App) {
         component.render(f, chunks[1]);
     } else {
         let main = Paragraph::new("Unknown tab")
-            .block(Block::default().title("Error").borders(Borders::ALL));
+            .block(
+                Block::default()
+                    .title("Error")
+                    .borders(Borders::ALL)
+                    .border_style(theme.error_style()),
+            )
+            .style(theme.error_style());
         f.render_widget(main, chunks[1]);
     }
 
@@ -51,6 +66,6 @@ pub fn draw_ui(f: &mut Frame, app: &App) {
             "[←/→] Switch Tab   [Q/Esc/Ctrl+C] Quit"
         };
 
-    let help = Paragraph::new(help_text).style(Style::default().fg(Color::DarkGray));
+    let help = Paragraph::new(help_text).style(theme.muted_style());
     f.render_widget(help, chunks[2]);
 }

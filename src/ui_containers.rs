@@ -1,5 +1,6 @@
 use crate::components::Component;
 use crate::docker::DockerClient;
+use crate::theme::current_theme;
 use color_eyre::Result;
 use crossterm::event::KeyCode;
 use ratatui::{
@@ -155,23 +156,30 @@ impl Component for ContainersUI {
     }
 
     fn render(&self, f: &mut Frame, area: ratatui::layout::Rect) {
+        let theme = current_theme();
+
         if self.containers.is_empty() {
-            // Show loading or empty state
+            // Show loading or empty state with theme
             let paragraph = Paragraph::new("No containers found or loading...")
-                .block(Block::default().title("Containers").borders(Borders::ALL))
-                .style(Style::default().fg(Color::DarkGray));
+                .block(
+                    Block::default()
+                        .title("Containers")
+                        .borders(Borders::ALL)
+                        .border_style(theme.border_style()),
+                )
+                .style(theme.muted_style());
             f.render_widget(paragraph, area);
         } else {
-            // Create list items with selection highlighting
+            // Create list items with selection highlighting using theme
             let items: Vec<ListItem> = self
                 .containers
                 .iter()
                 .enumerate()
                 .map(|(i, container)| {
                     let style = if i == self.selected_index {
-                        Style::default().fg(Color::LightYellow).bg(Color::DarkGray)
+                        theme.selected_style()
                     } else {
-                        Style::default().fg(Color::White)
+                        theme.normal_style()
                     };
                     ListItem::new(container.clone()).style(style)
                 })
@@ -181,9 +189,10 @@ impl Component for ContainersUI {
                 .block(
                     Block::default()
                         .title(format!("Containers ({})", self.containers.len()))
-                        .borders(Borders::ALL),
+                        .borders(Borders::ALL)
+                        .border_style(theme.border_style()),
                 )
-                .style(Style::default());
+                .style(theme.normal_style());
 
             f.render_widget(list, area);
         }

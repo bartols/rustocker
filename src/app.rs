@@ -33,12 +33,16 @@ pub struct App {
 }
 
 impl App {
-    pub async fn new() -> Result<Self> {
+    pub async fn new(ip: Option<String>) -> Result<Self> {
         let (event_tx, event_rx) = mpsc::unbounded_channel();
         let cancellation_token = CancellationToken::new();
 
         // Initialize shared Docker client
-        let docker_client = Arc::new(Mutex::new(DockerClient::new().await?));
+        let docker_client = if ip.is_none() {
+            Arc::new(Mutex::new(DockerClient::new().await?))
+        } else {
+            Arc::new(Mutex::new(DockerClient::connect(&ip.unwrap(), 5).await?))
+        };
 
         // Initialize UI modules with shared Docker client
         let containers_ui = ContainersUI::new(Arc::clone(&docker_client), 0);

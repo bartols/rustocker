@@ -1,5 +1,6 @@
 use crate::components::Component;
 use crate::docker::DockerClient;
+use crate::theme::current_theme;
 use async_trait::async_trait;
 use color_eyre::Result;
 use crossterm::event::KeyCode;
@@ -136,10 +137,17 @@ impl Component for NetworksUI {
     }
 
     fn render(&self, f: &mut Frame, area: ratatui::layout::Rect) {
+        let theme = current_theme();
+
         if self.networks.is_empty() {
             let paragraph = Paragraph::new("No networks found or loading...")
-                .block(Block::default().title("Networks").borders(Borders::ALL))
-                .style(Style::default().fg(Color::DarkGray));
+                .block(
+                    Block::default()
+                        .title("Networks")
+                        .borders(Borders::ALL)
+                        .border_style(theme.border_style()),
+                )
+                .style(theme.muted_style());
             f.render_widget(paragraph, area);
         } else {
             let items: Vec<ListItem> = self
@@ -148,9 +156,9 @@ impl Component for NetworksUI {
                 .enumerate()
                 .map(|(i, network)| {
                     let style = if i == self.selected_index {
-                        Style::default().fg(Color::LightYellow).bg(Color::DarkGray)
+                        theme.selected_style()
                     } else {
-                        Style::default().fg(Color::White)
+                        theme.normal_style()
                     };
                     ListItem::new(network.clone()).style(style)
                 })
@@ -160,9 +168,10 @@ impl Component for NetworksUI {
                 .block(
                     Block::default()
                         .title(format!("Networks ({})", self.networks.len()))
-                        .borders(Borders::ALL),
+                        .borders(Borders::ALL)
+                        .border_style(theme.border_style()),
                 )
-                .style(Style::default());
+                .style(theme.normal_style());
 
             f.render_widget(list, area);
         }

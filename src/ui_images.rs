@@ -1,5 +1,6 @@
 use crate::components::Component;
 use crate::docker::{DockerClient, ImageInfo, ImageInspectDetails};
+use crate::theme::current_theme;
 
 use async_trait::async_trait;
 use color_eyre::Result;
@@ -7,11 +8,9 @@ use crossterm::event::KeyCode;
 use ratatui::{
     Frame,
     layout::{Alignment, Constraint, Direction, Layout},
-    style::{Color, Style},
     text::{Line, Span},
-    widgets::{Block, Borders, Clear, List, ListItem, Paragraph},
+    widgets::{Block, Borders, Clear, Paragraph},
 };
-use std::collections::HashMap;
 use std::sync::Arc;
 use tokio::sync::Mutex;
 
@@ -104,22 +103,29 @@ impl ImagesUI {
     }
 
     fn render_main_table(&self, f: &mut Frame, area: ratatui::layout::Rect) {
+        let theme = current_theme();
+
         if self.images.is_empty() {
             let paragraph = Paragraph::new("No images found or loading...")
-                .block(Block::default().title("Images").borders(Borders::ALL))
-                .style(Style::default().fg(Color::DarkGray));
+                .block(
+                    Block::default()
+                        .title("Images")
+                        .borders(Borders::ALL)
+                        .border_style(theme.border_style()),
+                )
+                .style(theme.muted_style());
             f.render_widget(paragraph, area);
         } else {
             use ratatui::layout::Constraint;
             use ratatui::widgets::{Cell, Row, Table};
 
-            // Create table headers
+            // Create table headers with theme
             let headers = Row::new(vec![
-                Cell::from("Repository:Tag").style(Style::default().fg(Color::Yellow)),
-                Cell::from("Image ID").style(Style::default().fg(Color::Yellow)),
-                Cell::from("Size").style(Style::default().fg(Color::Yellow)),
-                Cell::from("Created").style(Style::default().fg(Color::Yellow)),
-                Cell::from("Containers").style(Style::default().fg(Color::Yellow)),
+                Cell::from("Repository:Tag").style(theme.header_style()),
+                Cell::from("Image ID").style(theme.header_style()),
+                Cell::from("Size").style(theme.header_style()),
+                Cell::from("Created").style(theme.header_style()),
+                Cell::from("Containers").style(theme.header_style()),
             ]);
 
             // Create table rows using pre-formatted data
@@ -129,9 +135,9 @@ impl ImagesUI {
                 .enumerate()
                 .map(|(i, image)| {
                     let style = if i == self.selected_index {
-                        Style::default().fg(Color::LightYellow).bg(Color::DarkGray)
+                        theme.selected_style()
                     } else {
-                        Style::default().fg(Color::White)
+                        theme.normal_style()
                     };
 
                     Row::new(vec![
@@ -145,7 +151,7 @@ impl ImagesUI {
                 })
                 .collect();
 
-            // Create the table
+            // Create the table with theme
             let table = Table::new(
                 rows,
                 vec![
@@ -160,7 +166,8 @@ impl ImagesUI {
             .block(
                 Block::default()
                     .title(format!("Images ({})", self.images.len()))
-                    .borders(Borders::ALL),
+                    .borders(Borders::ALL)
+                    .border_style(theme.border_style()),
             )
             .column_spacing(1);
 
@@ -169,6 +176,8 @@ impl ImagesUI {
     }
 
     fn render_inspect_modal(&self, f: &mut Frame, area: ratatui::layout::Rect) {
+        let theme = current_theme();
+
         // Calculate modal size (80% of screen)
         let popup_area = Layout::default()
             .direction(Direction::Vertical)
@@ -212,29 +221,29 @@ impl ImagesUI {
                     Block::default()
                         .title("Image Inspection")
                         .borders(Borders::ALL)
-                        .border_style(Style::default().fg(Color::Cyan)),
+                        .border_style(theme.modal_border_style()),
                 )
-                .style(Style::default().fg(Color::White))
+                .style(theme.normal_style())
                 .wrap(ratatui::widgets::Wrap { trim: false });
 
             f.render_widget(paragraph, content_area[0]);
 
-            // Help text at bottom
+            // Help text at bottom with theme
             let help = Paragraph::new("[↑/↓] Scroll   [Esc] Close")
-                .style(Style::default().fg(Color::DarkGray))
+                .style(theme.muted_style())
                 .alignment(Alignment::Center);
 
             f.render_widget(help, content_area[1]);
         } else {
-            // Loading state
+            // Loading state with theme
             let paragraph = Paragraph::new("Loading image details...")
                 .block(
                     Block::default()
                         .title("Image Inspection")
                         .borders(Borders::ALL)
-                        .border_style(Style::default().fg(Color::Cyan)),
+                        .border_style(theme.modal_border_style()),
                 )
-                .style(Style::default().fg(Color::DarkGray))
+                .style(theme.loading_style())
                 .alignment(Alignment::Center);
 
             f.render_widget(paragraph, popup_area);
@@ -242,107 +251,111 @@ impl ImagesUI {
     }
 
     fn format_inspect_data<'a>(&self, data: &'a ImageInspectDetails) -> Vec<Line<'a>> {
+        let theme = current_theme();
         let mut lines = Vec::new();
 
-        // Basic Information
+        // Basic Information with theme colors
         lines.push(Line::from(vec![Span::styled(
             "Basic Information",
-            Style::default().fg(Color::Yellow),
+            theme.header_style(),
         )]));
         lines.push(Line::from(""));
 
         lines.push(Line::from(vec![
-            Span::styled("ID: ", Style::default().fg(Color::Blue)),
-            Span::raw(&data.id),
+            Span::styled("ID: ", theme.highlight_style()),
+            Span::styled(&data.id, theme.normal_style()),
         ]));
 
         lines.push(Line::from(vec![
-            Span::styled("Repository Tags: ", Style::default().fg(Color::Blue)),
-            Span::raw(data.repo_tags.join(", ")),
+            Span::styled("Repository Tags: ", theme.highlight_style()),
+            Span::styled(data.repo_tags.join(", "), theme.normal_style()),
         ]));
 
         lines.push(Line::from(vec![
-            Span::styled("Size: ", Style::default().fg(Color::Blue)),
-            Span::raw(&data.size_formatted),
+            Span::styled("Size: ", theme.highlight_style()),
+            Span::styled(&data.size_formatted, theme.normal_style()),
         ]));
 
         lines.push(Line::from(vec![
-            Span::styled("Created: ", Style::default().fg(Color::Blue)),
-            Span::raw(&data.created_formatted),
+            Span::styled("Created: ", theme.highlight_style()),
+            Span::styled(&data.created_formatted, theme.normal_style()),
         ]));
 
         lines.push(Line::from(vec![
-            Span::styled("Architecture: ", Style::default().fg(Color::Blue)),
-            Span::raw(&data.architecture),
+            Span::styled("Architecture: ", theme.highlight_style()),
+            Span::styled(&data.architecture, theme.normal_style()),
         ]));
 
         lines.push(Line::from(vec![
-            Span::styled("OS: ", Style::default().fg(Color::Blue)),
-            Span::raw(&data.os),
+            Span::styled("OS: ", theme.highlight_style()),
+            Span::styled(&data.os, theme.normal_style()),
         ]));
 
         lines.push(Line::from(""));
 
-        // Configuration
+        // Configuration with theme colors
         lines.push(Line::from(vec![Span::styled(
             "Configuration",
-            Style::default().fg(Color::Yellow),
+            theme.header_style(),
         )]));
         lines.push(Line::from(""));
 
         if !data.env.is_empty() {
             lines.push(Line::from(vec![Span::styled(
                 "Environment Variables:",
-                Style::default().fg(Color::Blue),
+                theme.highlight_style(),
             )]));
             for env in &data.env {
-                lines.push(Line::from(vec![Span::raw("  "), Span::raw(env)]));
+                lines.push(Line::from(vec![
+                    Span::raw("  "),
+                    Span::styled(env, theme.info_style()),
+                ]));
             }
             lines.push(Line::from(""));
         }
 
         if !data.exposed_ports.is_empty() {
             lines.push(Line::from(vec![
-                Span::styled("Exposed Ports: ", Style::default().fg(Color::Blue)),
-                Span::raw(data.exposed_ports.join(", ")),
+                Span::styled("Exposed Ports: ", theme.highlight_style()),
+                Span::styled(data.exposed_ports.join(", "), theme.normal_style()),
             ]));
         }
 
         if !data.working_dir.is_empty() {
             lines.push(Line::from(vec![
-                Span::styled("Working Directory: ", Style::default().fg(Color::Blue)),
-                Span::raw(&data.working_dir),
+                Span::styled("Working Directory: ", theme.highlight_style()),
+                Span::styled(&data.working_dir, theme.normal_style()),
             ]));
         }
 
         if !data.entrypoint.is_empty() {
             lines.push(Line::from(vec![
-                Span::styled("Entrypoint: ", Style::default().fg(Color::Blue)),
-                Span::raw(data.entrypoint.join(" ")),
+                Span::styled("Entrypoint: ", theme.highlight_style()),
+                Span::styled(data.entrypoint.join(" "), theme.normal_style()),
             ]));
         }
 
         if !data.cmd.is_empty() {
             lines.push(Line::from(vec![
-                Span::styled("Command: ", Style::default().fg(Color::Blue)),
-                Span::raw(data.cmd.join(" ")),
+                Span::styled("Command: ", theme.highlight_style()),
+                Span::styled(data.cmd.join(" "), theme.normal_style()),
             ]));
         }
 
         lines.push(Line::from(""));
 
-        // Labels
+        // Labels with theme colors
         if !data.labels.is_empty() {
             lines.push(Line::from(vec![Span::styled(
                 "Labels",
-                Style::default().fg(Color::Yellow),
+                theme.header_style(),
             )]));
             lines.push(Line::from(""));
 
             for (key, value) in &data.labels {
                 lines.push(Line::from(vec![
-                    Span::styled(format!("{}: ", key), Style::default().fg(Color::Blue)),
-                    Span::raw(value),
+                    Span::styled(format!("{}: ", key), theme.highlight_style()),
+                    Span::styled(value, theme.normal_style()),
                 ]));
             }
         }
@@ -381,13 +394,13 @@ impl Component for ImagesUI {
                     self.show_inspect_modal = false;
                     self.inspect_data = None;
                     self.inspect_scroll = 0;
-                    return Ok(true);
+                    return Ok(true); // Event handled by modal
                 }
                 KeyCode::Up => {
                     if self.inspect_scroll > 0 {
                         self.inspect_scroll -= 1;
                     }
-                    return Ok(true);
+                    return Ok(true); // Event handled by modal
                 }
                 KeyCode::Down => {
                     if let Some(inspect_data) = &self.inspect_data {
@@ -396,10 +409,10 @@ impl Component for ImagesUI {
                             self.inspect_scroll += 1;
                         }
                     }
-                    return Ok(true);
+                    return Ok(true); // Event handled by modal
                 }
                 _ => {
-                    return Ok(true);
+                    return Ok(true); // Modal is open, consume all other events
                 }
             }
         }
@@ -410,41 +423,41 @@ impl Component for ImagesUI {
                 if self.selected_index > 0 {
                     self.selected_index -= 1;
                 }
-                Ok(true)
+                Ok(true) // Event handled
             }
             KeyCode::Down => {
                 if self.selected_index < self.images.len().saturating_sub(1) {
                     self.selected_index += 1;
                 }
-                Ok(true)
+                Ok(true) // Event handled
             }
             KeyCode::Char('r') | KeyCode::F(5) => {
                 // Manual refresh for images only
                 self.refresh_now().await?;
-                Ok(true)
+                Ok(true) // Event handled
             }
             KeyCode::Char('d') => {
                 if let Some(image) = self.get_selected_image() {
                     let image = image.clone();
                     self.delete_image(&image).await?;
                 }
-                Ok(true)
+                Ok(true) // Event handled
             }
             KeyCode::Char('p') => {
                 if let Some(image) = self.get_selected_image() {
                     let image = image.clone();
                     self.pull_image(&image).await?;
                 }
-                Ok(true)
+                Ok(true) // Event handled
             }
             KeyCode::Char('i') => {
                 if let Some(image) = self.get_selected_image() {
                     let image = image.clone();
                     self.inspect_image(&image).await?;
                 }
-                Ok(true)
+                Ok(true) // Event handled
             }
-            _ => Ok(false),
+            _ => Ok(false), // Event not handled, pass to global handler
         }
     }
 

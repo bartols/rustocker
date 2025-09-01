@@ -1,12 +1,12 @@
 use crate::components::Component;
 use crate::docker::DockerClient;
+use crate::theme::current_theme;
 
 use async_trait::async_trait;
 use color_eyre::Result;
 use crossterm::event::KeyCode;
 use ratatui::{
     Frame,
-    style::{Color, Style},
     widgets::{Block, Borders, List, ListItem, Paragraph},
 };
 use std::sync::Arc;
@@ -137,10 +137,17 @@ impl Component for VolumesUI {
     }
 
     fn render(&self, f: &mut Frame, area: ratatui::layout::Rect) {
+        let theme = current_theme();
+
         if self.volumes.is_empty() {
             let paragraph = Paragraph::new("No volumes found or loading...")
-                .block(Block::default().title("Volumes").borders(Borders::ALL))
-                .style(Style::default().fg(Color::DarkGray));
+                .block(
+                    Block::default()
+                        .title("Volumes")
+                        .borders(Borders::ALL)
+                        .border_style(theme.border_style()),
+                )
+                .style(theme.muted_style());
             f.render_widget(paragraph, area);
         } else {
             let items: Vec<ListItem> = self
@@ -149,9 +156,9 @@ impl Component for VolumesUI {
                 .enumerate()
                 .map(|(i, volume)| {
                     let style = if i == self.selected_index {
-                        Style::default().fg(Color::LightYellow).bg(Color::DarkGray)
+                        theme.selected_style()
                     } else {
-                        Style::default().fg(Color::White)
+                        theme.normal_style()
                     };
                     ListItem::new(volume.clone()).style(style)
                 })
@@ -161,9 +168,10 @@ impl Component for VolumesUI {
                 .block(
                     Block::default()
                         .title(format!("Volumes ({})", self.volumes.len()))
-                        .borders(Borders::ALL),
+                        .borders(Borders::ALL)
+                        .border_style(theme.border_style()),
                 )
-                .style(Style::default());
+                .style(theme.normal_style());
 
             f.render_widget(list, area);
         }
